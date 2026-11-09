@@ -31,10 +31,19 @@ PORT=9000 poetry run python main.py
 | GET    | `/haiku`   | `{"haiku": "<haiku written by Gemini>"}` |
 | GET    | `/fortune` | `{"fortune": "<fortune written by Gemini>"}` |
 
-`/haiku` and `/fortune` call Gemini and return a JSON error if that fails:
+| GET    | `/ask?q=<question>` | `{"answer": "<answer written by Gemini>"}` |
+
+`/ask` requires a query parameter `q` of up to 200 characters. Answers are limited to about 200 output tokens and three sentences or fewer. Each valid request is a billable Gemini call.
+
+```bash
+curl "localhost:8080/ask?q=What%20is%20a%20container%3F"
+```
+
+`/haiku`, `/fortune`, and `/ask` call Gemini and return a JSON error if something goes wrong:
 
 | Status | Meaning |
 | ------ | ------- |
+| 400    | `/ask` only: `q` is missing, empty, or longer than 200 characters |
 | 503    | Gemini isn't set up, for example `GOOGLE_CLOUD_PROJECT` is missing or credentials can't be loaded |
 | 502    | The Gemini call failed or returned no text |
 
@@ -63,7 +72,7 @@ gcloud auth application-default login
 GOOGLE_CLOUD_PROJECT=your_project_id poetry run python main.py
 ```
 
-On Cloud Run, set `GOOGLE_CLOUD_PROJECT` on the service and grant its service account the `roles/aiplatform.user` role.
+On Cloud Run, set `GOOGLE_CLOUD_PROJECT` on the service and grant its service account the `roles/aiplatform.user` role. The `Procfile` tells Cloud Run how to start the app.
 
 ## Updating requirements.txt
 
