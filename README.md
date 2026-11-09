@@ -28,6 +28,42 @@ PORT=9000 poetry run python main.py
 | ------ | ---------- | --------------------------------------- |
 | GET    | `/hello`   | `{"message": "Hey there! What's up?"}`  |
 | GET    | `/goodbye` | `{"message": "Catch you later!"}`       |
+| GET    | `/haiku`   | `{"haiku": "<haiku written by Gemini>"}` |
+| GET    | `/fortune` | `{"fortune": "<fortune written by Gemini>"}` |
+
+`/haiku` and `/fortune` call Gemini and return a JSON error if that fails:
+
+| Status | Meaning |
+| ------ | ------- |
+| 503    | Gemini isn't set up, for example `GOOGLE_CLOUD_PROJECT` is missing or credentials can't be loaded |
+| 502    | The Gemini call failed or returned no text |
+
+The body looks like `{"error": "The Gemini request failed. Please try again later."}`. Details are written to the server log.
+
+## Gemini setup
+
+The Gemini endpoints use Vertex AI and Application Default Credentials. They don't use API keys or key files.
+
+| Environment variable    | Required | Default                 |
+| ----------------------- | -------- | ----------------------- |
+| `GOOGLE_CLOUD_PROJECT`  | Yes      | None                    |
+| `GOOGLE_CLOUD_LOCATION` | No       | `global`                |
+| `GEMINI_MODEL`          | No       | `gemini-3.1-flash-lite` |
+
+Enable Vertex AI on your Google Cloud project (billing must be linked):
+
+```bash
+gcloud services enable aiplatform.googleapis.com
+```
+
+To run locally, log in and start the app with your project ID:
+
+```bash
+gcloud auth application-default login
+GOOGLE_CLOUD_PROJECT=your_project_id poetry run python main.py
+```
+
+On Cloud Run, set `GOOGLE_CLOUD_PROJECT` on the service and grant its service account the `roles/aiplatform.user` role.
 
 ## Updating requirements.txt
 
