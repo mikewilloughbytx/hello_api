@@ -1,9 +1,89 @@
+import logging
 import os
+from functools import lru_cache
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from google import genai
+from google.auth.exceptions import DefaultCredentialsError
+from google.genai import types
+
+logger = logging.getLogger(__name__)
+
+HAIKU_PROMPT = (
+    "Write a short haiku about DevOps. Reply with only the haiku, with no title."
+)
+FORTUNE_PROMPT = (
+    "Write a one-sentence, software-themed fortune-cookie message. "
+    "Reply with only the message."
+)
+ASK_SYSTEM_INSTRUCTION = "Answer the user's question in three sentences or fewer."
+MAX_OUTPUT_TOKENS = 100
+ASK_MAX_OUTPUT_TOKENS = 200
+ASK_MAX_QUESTION_LENGTH = 200
+GEMINI_TIMEOUT_MS = 30_000
 
 app = FastAPI()
+
+
+class ApiError(Exception):
+    def __init__(self, status_code: int, message: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.message = message
+
+
+@app.exception_handler(ApiError)
+def handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
+    return JSONResponse(status_code=exc.status_code, content={"error": exc.message})
+
+
+# lru_cache does not store exceptions, so a failed setup is retried on the next request.
+@lru_cache(maxsize=1)
+def get_client() -> genai.Client:
+    project = os.environ.get("GOOGLE_CLOUD_PROJECT")
+    if not project:
+        raise ApiError(503, "Gemini is not configured: GOOGLE_CLOUD_PROJECT is not set.")
+    try:
+        return genai.Client(
+            vertexai=True,
+            project=project,
+            location=os.environ.get("GOOGLE_CLOUD_LOCATION", "global"),
+            http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS),
+        )
+    except Exception as exc:
+        logger.exception("Could not create the Gemini client")
+        raise ApiError(503, "Gemini is not available: could not set up the client.") from exc
+
+
+def generate_text(
+    prompt: str,
+    max_output_tokens: int = MAX_OUTPUT_TOKENS,
+    system_instruction: str | None = None,
+) -> str:
+    client = get_client()
+    try:
+        response = client.models.generate_content(
+            model=os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-lite"),
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                max_output_tokens=max_output_tokens,
+                system_instruction=system_instruction,
+            ),
+        )
+        text = (response.text or "").strip()
+    except DefaultCredentialsError as exc:
+        # The SDK loads credentials on the first call, not when the client is created.
+        logger.exception("Could not load Application Default Credentials")
+        raise ApiError(503, "Gemini is not available: credentials could not be loaded.") from exc
+    except Exception as exc:
+        logger.exception("The Gemini call failed")
+        raise ApiError(502, "The Gemini request failed. Please try again later.") from exc
+    if not text:
+        logger.error("Gemini returned no text: %s", response)
+        raise ApiError(502, "Gemini returned an empty response. Please try again later.")
+    return text
 
 
 @app.get("/hello")
@@ -14,6 +94,32 @@ def hello() -> dict[str, str]:
 @app.get("/goodbye")
 def goodbye() -> dict[str, str]:
     return {"message": "Catch you later!"}
+
+
+@app.get("/haiku")
+def haiku() -> dict[str, str]:
+    return {"haiku": generate_text(HAIKU_PROMPT)}
+
+
+@app.get("/fortune")
+def fortune() -> dict[str, str]:
+    return {"fortune": generate_text(FORTUNE_PROMPT)}
+
+
+@app.get("/ask")
+def ask(q: str = "") -> dict[str, str]:
+    # Validate here rather than with Query() so errors use the app's {"error": ...} format.
+    if len(q) > ASK_MAX_QUESTION_LENGTH:
+        raise ApiError(400, f"Query parameter 'q' must be {ASK_MAX_QUESTION_LENGTH} characters or fewer.")
+    question = q.strip()
+    if not question:
+        raise ApiError(400, "Query parameter 'q' is required and cannot be empty.")
+    answer = generate_text(
+        question,
+        max_output_tokens=ASK_MAX_OUTPUT_TOKENS,
+        system_instruction=ASK_SYSTEM_INSTRUCTION,
+    )
+    return {"answer": answer}
 
 
 if __name__ == "__main__":
